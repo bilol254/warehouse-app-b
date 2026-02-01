@@ -1,74 +1,156 @@
-import express from 'express';
-import { db } from '../server.js';
-import { verifyToken, verifyManager } from '../middleware/auth.js';
+import express from 'express'
+import { prisma } from '../server.js'
+import { verifyToken, verifyManager } from '../middleware/auth.js'
 
-const router = express.Router();
+const router = express.Router()
 
 // Create debt
-router.post('/', verifyToken, (req, res) => {
-  const userId = req.user?.id;
-  const { customer_name, phone, given_at, due_date, amount, note } = req.body;
-  if (!customer_name || !phone || !given_at || !due_date || !amount) return res.status(400).json({ error: 'Kerakli maydonlar yetishmayapti' });
-  if (String(phone).length < 9) return res.status(400).json({ error: 'Phone format kamida 9 belgi' });
+router.post('/', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user?.id
+    const { customerName, phone, givenAt, dueDate, amount, note } = req.body
 
-  db.run(
-    'INSERT INTO debts (created_by_user_id, customer_name, phone, given_at, due_date, amount, note) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [userId || null, customer_name, phone, given_at, due_date, amount, note || null],
-    function (err) {
-      if (err) return res.status(500).json({ error: 'Xato' });
-      res.json({ id: this.lastID });
+    if (!customerName || !phone || !givenAt || !dueDate || !amount) {
+      return res.status(400).json({ error: 'Kerakli maydonlar yetishmayapti' })
     }
-  );
-});
+    if (String(phone).length < 9) {
+      return res.status(400).json({ error: 'Phone format kamida 9 belgi' })
+    }
+
+    const debt = await prisma.debt.create({
+      data: {
+        createdById: userId || null,
+        customerName,
+        phone,
+        givenAt: new Date(givenAt),
+        dueDate: new Date(dueDate),
+        amount,
+        note: note || null,
+        status: 'open',
+      },
+    })
+
+    res.json(debt)
+  } catch (error) {
+    res.status(500).json({ error: 'Xato' })
+  }
+})
 
 // List debts with filters
-router.get('/', verifyToken, (req, res) => {
-  const { status, from, to, due_from, due_to, search } = req.query;
-  let where = [];
-  let params = [];
-  if (status) { where.push('status = ?'); params.push(status); }
-  if (from) { where.push('date(given_at) >= date(?)'); params.push(from); }
-  if (to) { where.push('date(given_at) <= date(?)'); params.push(to); }
-  if (due_from) { where.push('date(due_date) >= date(?)'); params.push(due_from); }
-  if (due_to) { where.push('date(due_date) <= date(?)'); params.push(due_to); }
-  if (search) { where.push('(customer_name LIKE ? OR phone LIKE ?)'); params.push('%' + search + '%', '%' + search + '%'); }
+router.get('/', verifyToken, async (req, res) => {
+  try {
+    const { status, from, to, dueFrom, dueTo, search } = req.query
+    const where = {}
 
-  const q = `SELECT * FROM debts ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC`;
-  db.all(q, params, (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Server xatosi' });
-    res.json(rows || []);
-  });
-});
+    if (status) {
+      where.status = status
+    }
+    if (from) {
+      where.givenAt = { gte: new Date(from) }
+    }
+    if (to) {
+      const end = new Date(to)
+      end.setHours(23, 59, 59, 999)
+      if (where.givenAt) {
+        where.givenAt.lte = end
+      } else {
+        where.givenAt = { lte: end }
+      }
+    }
+    if (dueFrom) {
+      where.dueDate = { gte: new Date(dueFrom) }
+    }
+    if (dueTo) {
+      const end = new Date(dueTo)
+      end.setHours(23, 59, 59, 999)
+      if (where.dueDate) {
+        where.dueDate.lte = end
+      } else {
+        where.dueDate = { lte: end }
+      }
+    }
+    if (search) {
+      where.OR = [
+        { customerName: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+      ]
+    }
+
+    const debts = await prisma.debt.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+    })
+
+    res.json(debts)
+  } catch (error) {
+    res.status(500).json({ error: 'Server xatosi' })
+  }
+})
 
 // Pay debt
-router.post('/:id/pay', verifyToken, (req, res) => {
-  const id = req.params.id;
-  const { paid_amount } = req.body;
-  if (!paid_amount) return res.status(400).json({ error: 'paid_amount kerak' });
-  const paid_at = new Date().toISOString();
-  db.run('UPDATE debts SET status = ?, paid_at = ?, paid_amount = ? WHERE id = ?', ['paid', paid_at, paid_amount, id], function (err) {
-    if (err) return res.status(500).json({ error: 'Xato' });
-    res.json({ updated: this.changes });
-  });
-});
+router.post('/:id/pay', verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id)
+    const { paidAmount } = req.body
+
+    if (!paidAmount) {
+      return res.status(400).json({ error: 'paidAmount kerak' })
+    }
+
+    const debt = await prisma.debt.update({
+      where: { id },
+      data: {
+        status: 'paid',
+        paidAt: new Date(),
+        paidAmount,
+      },
+    })
+
+    res.json(debt)
+  } catch (error) {
+    res.status(500).json({ error: 'Xato' })
+  }
+})
 
 // Edit (manager only)
-router.put('/:id', verifyToken, verifyManager, (req, res) => {
-  const id = req.params.id;
-  const { customer_name, phone, given_at, due_date, amount, note, status } = req.body;
-  db.run('UPDATE debts SET customer_name = ?, phone = ?, given_at = ?, due_date = ?, amount = ?, note = ?, status = ? WHERE id = ?', [customer_name, phone, given_at, due_date, amount, note, status || 'open', id], function (err) {
-    if (err) return res.status(500).json({ error: 'Xato' });
-    res.json({ updated: this.changes });
-  });
-});
+router.put('/:id', verifyToken, verifyManager, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id)
+    const { customerName, phone, givenAt, dueDate, amount, note, status } = req.body
+
+    const debt = await prisma.debt.update({
+      where: { id },
+      data: {
+        customerName,
+        phone,
+        givenAt: new Date(givenAt),
+        dueDate: new Date(dueDate),
+        amount,
+        note,
+        status: status || 'open',
+      },
+    })
+
+    res.json(debt)
+  } catch (error) {
+    res.status(500).json({ error: 'Xato' })
+  }
+})
 
 // Delete (manager only)
-router.delete('/:id', verifyToken, verifyManager, (req, res) => {
-  const id = req.params.id;
-  db.run('DELETE FROM debts WHERE id = ?', [id], function (err) {
-    if (err) return res.status(500).json({ error: 'Xato' });
-    res.json({ deleted: this.changes });
-  });
-});
+router.delete('/:id', verifyToken, verifyManager, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id)
 
-export default router;
+    await prisma.debt.delete({
+      where: { id },
+    })
+
+    res.json({ deleted: true })
+  } catch (error) {
+    res.status(500).json({ error: 'Xato' })
+  }
+})
+
+export default router
+

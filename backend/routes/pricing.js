@@ -1,37 +1,46 @@
-import express from 'express';
-import { db } from '../server.js';
-import { verifyToken, verifyManager } from '../middleware/auth.js';
+import express from 'express'
+import { prisma } from '../server.js'
+import { verifyToken, verifyManager } from '../middleware/auth.js'
 
-const router = express.Router();
+const router = express.Router()
 
 // Get pricing rules
-router.get('/:product_id', verifyToken, (req, res) => {
-  db.get('SELECT * FROM pricing_rules WHERE product_id = ?', [req.params.product_id], (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: 'Server xatosi' });
-    }
-    res.json(row || { product_id: req.params.product_id, minimal_price_per_unit: 0, recommended_price_per_unit: 0 });
-  });
-});
+router.get('/:productId', verifyToken, async (req, res) => {
+  try {
+    const pricing = await prisma.pricingRule.findUnique({
+      where: { productId: parseInt(req.params.productId) },
+    })
+    res.json(pricing || { productId: parseInt(req.params.productId), minimalPricePerUnit: 0, recommendedPricePerUnit: 0 })
+  } catch (error) {
+    res.status(500).json({ error: 'Server xatosi' })
+  }
+})
 
 // Update pricing rules (manager only)
-router.put('/:product_id', verifyToken, verifyManager, (req, res) => {
-  const { minimal_price_per_unit, recommended_price_per_unit, promo_type, promo_value, promo_start, promo_end } = req.body;
+router.put('/:productId', verifyToken, verifyManager, async (req, res) => {
+  try {
+    const { minimalPricePerUnit, recommendedPricePerUnit } = req.body
 
-  const product_id = req.params.product_id;
+    const productId = parseInt(req.params.productId)
 
-  db.run(
-    `UPDATE pricing_rules 
-     SET minimal_price_per_unit = ?, recommended_price_per_unit = ?, promo_type = ?, promo_value = ?, promo_start = ?, promo_end = ?
-     WHERE product_id = ?`,
-    [minimal_price_per_unit || 0, recommended_price_per_unit || 0, promo_type || null, promo_value || null, promo_start || null, promo_end || null, product_id],
-    (err) => {
-      if (err) {
-        return res.status(500).json({ error: 'Xato' });
-      }
-      res.json({ success: true });
-    }
-  );
-});
+    const pricing = await prisma.pricingRule.upsert({
+      where: { productId },
+      update: {
+        minimalPricePerUnit: minimalPricePerUnit || 0,
+        recommendedPricePerUnit: recommendedPricePerUnit || 0,
+      },
+      create: {
+        productId,
+        minimalPricePerUnit: minimalPricePerUnit || 0,
+        recommendedPricePerUnit: recommendedPricePerUnit || 0,
+      },
+    })
 
-export default router;
+    res.json({ success: true, pricing })
+  } catch (error) {
+    res.status(500).json({ error: 'Xato' })
+  }
+})
+
+export default router
+

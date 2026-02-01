@@ -1,132 +1,190 @@
-import express from 'express';
-import { db } from '../server.js';
-import { verifyToken, verifyManager } from '../middleware/auth.js';
+import express from 'express'
+import { prisma } from '../server.js'
+import { verifyToken } from '../middleware/auth.js'
 
-const router = express.Router();
+const router = express.Router()
 
 // Get reports/stats
-router.get('/dashboard', verifyToken, (req, res) => {
-  const today = new Date().toISOString().split('T')[0];
+router.get('/dashboard', verifyToken, async (req, res) => {
+  try {
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
 
-  // Today's stats
-  db.get(
-    `SELECT 
-      COUNT(*) as sales_count, 
-      COALESCE(SUM(total_sum), 0) as total_revenue,
-      COALESCE(SUM(total_profit), 0) as total_profit
-     FROM sales WHERE DATE(sold_at) = ?`,
-    [today],
-    (err, todayStats) => {
-      if (err) {
-        return res.status(500).json({ error: 'Server xatosi' });
-      }
+    const tomorrowStart = new Date(today)
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1)
 
-      // Top products today
-      db.all(
-        `SELECT p.id, p.name, SUM(si.qty) as qty_sold, SUM(si.line_total) as revenue
-         FROM sale_items si
-         JOIN sales s ON si.sale_id = s.id
-         JOIN products p ON si.product_id = p.id
-         WHERE DATE(s.sold_at) = ?
-         GROUP BY p.id
-         ORDER BY qty_sold DESC
-         LIMIT 5`,
-        [today],
-        (err, topProducts) => {
-          if (err) {
-            return res.status(500).json({ error: 'Server xatosi' });
-          }
+    // Today's stats
+    const todayStats = await prisma.sale.aggregate({
+      where: {
+        soldAt: {
+          gte: today,
+          lt: tomorrowStart,
+        },
+      },
+      _count: { id: true },
+      _sum: { totalSum: true, totalProfit: true },
+    })
 
-          const hideProfit = req.user?.role !== 'manager';
-          const statsResp = todayStats || { sales_count: 0, total_revenue: 0, total_profit: 0 };
-          if (hideProfit) {
-            delete statsResp.total_profit;
-          }
-          const topProductsResp = (topProducts || []).map((p) => {
-            const copy = { ...p };
-            if (hideProfit) delete copy.revenue; // keep revenue but remove profit-sensitive fields if any
-            return copy;
-          });
+    // Top products today
+    const topProducts = await prisma.saleItem.groupBy({
+      by: ['productId'],
+      where: {
+        sale: {
+          soldAt: {
+            gte: today,
+            lt: tomorrowStart,
+          },
+        },
+      },
+      _sum: { qty: true, lineTotal: true, lineProfit: true },
+      orderBy: { _sum: { qty: 'desc' } },
+      take: 5,
+    })
 
-          res.json({ today_stats: statsResp, top_products: topProductsResp });
-        }
-      );
+    // Get product names
+    const productIds = topProducts.map((p) => p.productId)
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds } },
+    })
+
+    const productsMap = Object.fromEntries(products.map((p) => [p.id, p]))
+
+    const hideProfit = req.user?.role !== 'manager'
+
+    const statsResp = {
+      salesCount: todayStats._count.id,
+      totalRevenue: todayStats._sum.totalSum || 0,
+      totalProfit: todayStats._sum.totalProfit || 0,
     }
-  );
-});
+
+    if (hideProfit) {
+      delete statsResp.totalProfit
+    }
+
+    const topProductsResp = topProducts.map((p) => ({
+      productId: p.productId,
+      name: productsMap[p.productId]?.name,
+      qtySold: p._sum.qty || 0,
+      revenue: p._sum.lineTotal || 0,
+      ...(hideProfit ? {} : { profit: p._sum.lineProfit || 0 }),
+    }))
+
+    res.json({ todayStats: statsResp, topProducts: topProductsResp })
+  } catch (error) {
+    res.status(500).json({ error: 'Server xatosi' })
+  }
+})
 
 // Get stock summary
-router.get('/stock-summary', verifyToken, (req, res) => {
-  db.all(
-    `SELECT p.id, p.name, p.sku,
-      COALESCE(SUM(pur.qty_in), 0) - COALESCE((SELECT SUM(si.qty) FROM sale_items si WHERE si.product_id = p.id), 0) as current_qty,
-      pr.minimal_price_per_unit, pr.recommended_price_per_unit
-     FROM products p
-     LEFT JOIN purchases pur ON p.id = pur.product_id
-     LEFT JOIN pricing_rules pr ON p.id = pr.product_id
-     WHERE p.is_active = 1
-     GROUP BY p.id
-     ORDER BY current_qty DESC`,
-    [],
-    (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: 'Server xatosi' });
-      }
-      res.json(rows || []);
-    }
-  );
-});
+router.get('/stock-summary', verifyToken, async (req, res) => {
+  try {
+    const products = await prisma.product.findMany({
+      where: { isActive: true },
+      include: {
+        pricingRule: true,
+        purchases: true,
+        saleItems: true,
+      },
+    })
+
+    const stockSummary = products.map((p) => ({
+      id: p.id,
+      name: p.name,
+      sku: p.sku,
+      currentQty: (p.purchases.reduce((sum, pur) => sum + pur.qtyIn, 0) || 0) - (p.saleItems.reduce((sum, si) => sum + si.qty, 0) || 0),
+      minimalPricePerUnit: p.pricingRule?.minimalPricePerUnit || 0,
+      recommendedPricePerUnit: p.pricingRule?.recommendedPricePerUnit || 0,
+    }))
+
+    res.json(stockSummary)
+  } catch (error) {
+    res.status(500).json({ error: 'Server xatosi' })
+  }
+})
 
 // Get period report
-router.get('/period', verifyToken, (req, res) => {
-  const { start_date, end_date } = req.query;
+router.get('/period', verifyToken, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query
 
-  if (!start_date || !end_date) {
-    return res.status(400).json({ error: 'Sanalarni kiriting' });
-  }
-
-  db.get(
-    `SELECT 
-      COUNT(DISTINCT s.id) as sales_count,
-      COALESCE(SUM(s.total_sum), 0) as total_revenue,
-      COALESCE(SUM(s.total_profit), 0) as total_profit,
-      COALESCE(SUM(si.qty), 0) as total_qty_sold
-     FROM sales s
-     LEFT JOIN sale_items si ON s.id = si.sale_id
-     WHERE DATE(s.sold_at) BETWEEN ? AND ?`,
-    [start_date, end_date],
-    (err, stats) => {
-      if (err) {
-        return res.status(500).json({ error: 'Server xatosi' });
-      }
-
-      db.all(
-        `SELECT p.id, p.name, SUM(si.qty) as qty_sold, SUM(si.line_total) as revenue, SUM(si.line_profit) as profit
-         FROM sale_items si
-         JOIN sales s ON si.sale_id = s.id
-         JOIN products p ON si.product_id = p.id
-         WHERE DATE(s.sold_at) BETWEEN ? AND ?
-         GROUP BY p.id
-         ORDER BY revenue DESC`,
-        [start_date, end_date],
-        (err, products) => {
-          if (err) {
-            return res.status(500).json({ error: 'Server xatosi' });
-          }
-
-          const hideProfit = req.user?.role !== 'manager';
-          const statsResp = stats || { sales_count: 0, total_revenue: 0, total_profit: 0, total_qty_sold: 0 };
-          if (hideProfit) delete statsResp.total_profit;
-          const productsResp = (products || []).map((p) => {
-            const copy = { ...p };
-            if (hideProfit) delete copy.profit;
-            return copy;
-          });
-          res.json({ stats: statsResp, products: productsResp });
-        }
-      );
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Sanalarni kiriting' })
     }
-  );
-});
 
-export default router;
+    const start = new Date(startDate)
+    const end = new Date(endDate)
+    end.setHours(23, 59, 59, 999)
+
+    // Period stats
+    const periodStats = await prisma.sale.aggregate({
+      where: {
+        soldAt: {
+          gte: start,
+          lte: end,
+        },
+      },
+      _count: { id: true },
+      _sum: { totalSum: true, totalProfit: true },
+    })
+
+    // Aggregate sale items
+    const saleItems = await prisma.saleItem.findMany({
+      where: {
+        sale: {
+          soldAt: {
+            gte: start,
+            lte: end,
+          },
+        },
+      },
+      include: { product: true, sale: true },
+    })
+
+    // Group by product
+    const productStats = {}
+    saleItems.forEach((si) => {
+      if (!productStats[si.productId]) {
+        productStats[si.productId] = {
+          productId: si.productId,
+          name: si.product.name,
+          qtySold: 0,
+          revenue: 0,
+          profit: 0,
+        }
+      }
+      productStats[si.productId].qtySold += si.qty
+      productStats[si.productId].revenue += si.lineTotal
+      productStats[si.productId].profit += si.lineProfit
+    })
+
+    const hideProfit = req.user?.role !== 'manager'
+
+    const statsResp = {
+      salesCount: periodStats._count.id,
+      totalRevenue: periodStats._sum.totalSum || 0,
+      totalProfit: periodStats._sum.totalProfit || 0,
+      totalQtySold: saleItems.reduce((sum, si) => sum + si.qty, 0),
+    }
+
+    if (hideProfit) {
+      delete statsResp.totalProfit
+    }
+
+    const productsResp = Object.values(productStats)
+      .sort((a, b) => b.revenue - a.revenue)
+      .map((p) => {
+        if (hideProfit) {
+          const { profit, ...rest } = p
+          return rest
+        }
+        return p
+      })
+
+    res.json({ stats: statsResp, products: productsResp })
+  } catch (error) {
+    res.status(500).json({ error: 'Server xatosi' })
+  }
+})
+
+export default router
+

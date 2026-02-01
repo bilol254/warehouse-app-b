@@ -1,203 +1,216 @@
-import express from 'express';
-import { db } from '../server.js';
-import { verifyToken } from '../middleware/auth.js';
+import express from 'express'
+import { prisma } from '../server.js'
+import { verifyToken } from '../middleware/auth.js'
 
-const router = express.Router();
+const router = express.Router()
 
-// Get minimal price for product
-function getProductCost(product_id) {
-  return new Promise((resolve) => {
-    db.get(
-      `SELECT COALESCE(SUM(qty_in * buy_price_per_unit) + SUM(expense_total), 0) / COALESCE(SUM(qty_in), 1) as cost_per_unit
-       FROM purchases WHERE product_id = ?`,
-      [product_id],
-      (err, row) => {
-        resolve(row?.cost_per_unit || 0);
-      }
-    );
-  });
+// Get product cost from purchases
+async function getProductCost(productId) {
+  const purchases = await prisma.purchase.aggregate({
+    where: { productId },
+    _sum: { qtyIn: true, expenseTotal: true },
+  })
+
+  const totalQty = purchases._sum.qtyIn || 0
+  const totalExpense = purchases._sum.expenseTotal || 0
+
+  if (totalQty === 0) return 0
+  return totalExpense / totalQty
 }
 
 // Create sale
 router.post('/', verifyToken, async (req, res) => {
-  const { items, customer_name, payment_type } = req.body;
+  try {
+    const { items, customerName, paymentType } = req.body
 
-  if (!items || items.length === 0) {
-    return res.status(400).json({ error: 'Mahsulot tanlang' });
-  }
-
-  // Validate items
-  for (const item of items) {
-    if (item.qty <= 0 || item.sell_price_per_unit <= 0) {
-      return res.status(400).json({ error: 'Miqdor va narx to\'g\'ri emas' });
+    if (!items || items.length === 0) {
+      return res.status(400).json({ error: 'Mahsulot tanlang' })
     }
 
-    // Check minimal price
-    const pricing = await new Promise((resolve) => {
-      db.get('SELECT minimal_price_per_unit FROM pricing_rules WHERE product_id = ?', [item.product_id], (err, row) => {
-        resolve(row);
-      });
-    });
+    // Validate items and calculate totals
+    let totalSum = 0
+    let totalProfit = 0
+    const saleItemsData = []
 
-    const costPrice = await getProductCost(item.product_id);
-    const minimalPrice = pricing?.minimal_price_per_unit || costPrice;
-
-    if (item.sell_price_per_unit < minimalPrice) {
-      return res.status(400).json({
-        error: `Mahsulot ${item.product_id} uchun eng past narx: ${minimalPrice} so'm`
-      });
-    }
-
-    // Check stock
-    const stock = await new Promise((resolve) => {
-      db.get(
-        `SELECT COALESCE(SUM(qty_in), 0) - COALESCE((SELECT SUM(qty) FROM sale_items WHERE product_id = ?), 0) as current_qty
-         FROM purchases WHERE product_id = ?`,
-        [item.product_id, item.product_id],
-        (err, row) => {
-          resolve(row?.current_qty || 0);
-        }
-      );
-    });
-
-    if (item.qty > stock) {
-      return res.status(400).json({ error: `Yetarli mahsulot mavjud emas. Qoldiq: ${stock}` });
-    }
-  }
-
-  // Create sale
-  let totalSum = 0;
-  let totalProfit = 0;
-  const saleItems = [];
-
-  for (const item of items) {
-    const cost = await getProductCost(item.product_id);
-    const lineTotal = item.qty * item.sell_price_per_unit;
-    const lineProfit = item.qty * (item.sell_price_per_unit - cost);
-    totalSum += lineTotal;
-    totalProfit += lineProfit;
-    saleItems.push({
-      ...item,
-      cost_price_per_unit_snapshot: cost,
-      line_total: lineTotal,
-      line_profit: lineProfit
-    });
-  }
-
-  db.run(
-    'INSERT INTO sales (seller_id, sold_at, customer_name, payment_type, total_sum, total_profit) VALUES (?, ?, ?, ?, ?, ?)',
-    [req.user.id, new Date().toISOString(), customer_name || null, payment_type || null, totalSum, totalProfit],
-    function (err) {
-      if (err) {
-        return res.status(500).json({ error: 'Xato' });
+    for (const item of items) {
+      if (item.qty <= 0 || item.sellPricePerUnit <= 0) {
+        return res.status(400).json({ error: 'Miqdor va narx to\'g\'ri emas' })
       }
 
-      const saleId = this.lastID;
+      // Get pricing rule
+      const pricing = await prisma.pricingRule.findUnique({
+        where: { productId: item.productId },
+      })
 
-      // Insert sale items
-      saleItems.forEach((item) => {
-        db.run(
-          'INSERT INTO sale_items (sale_id, product_id, qty, sell_price_per_unit, cost_price_per_unit_snapshot, line_total, line_profit) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [saleId, item.product_id, item.qty, item.sell_price_per_unit, item.cost_price_per_unit_snapshot, item.line_total, item.line_profit]
-        );
-      });
+      const costPrice = await getProductCost(item.productId)
+      const minimalPrice = pricing?.minimalPricePerUnit || costPrice
 
-      // If seller, do not return profit numbers
-      const hideProfit = req.user?.role !== 'manager';
-      const resp = { id: saleId, total_sum: totalSum, items: saleItems };
-      if (!hideProfit) {
-        resp.total_profit = totalProfit;
-      } else {
-        // remove profit fields from items
-        resp.items = saleItems.map((it) => {
-          const copy = { ...it };
-          delete copy.line_profit;
-          delete copy.cost_price_per_unit_snapshot; // hide cost snapshot from sellers
-          return copy;
-        });
+      if (item.sellPricePerUnit < minimalPrice) {
+        return res.status(400).json({
+          error: `Mahsulot uchun eng past narx: ${minimalPrice} so'm`,
+        })
       }
 
-      res.json(resp);
+      // Check stock
+      const purchases = await prisma.purchase.aggregate({
+        where: { productId: item.productId },
+        _sum: { qtyIn: true },
+      })
+
+      const saleItems = await prisma.saleItem.aggregate({
+        where: { productId: item.productId },
+        _sum: { qty: true },
+      })
+
+      const totalPurchased = purchases._sum.qtyIn || 0
+      const totalSold = saleItems._sum.qty || 0
+      const currentStock = totalPurchased - totalSold
+
+      if (item.qty > currentStock) {
+        return res.status(400).json({
+          error: `Yetarli mahsulot mavjud emas. Qoldiq: ${currentStock}`,
+        })
+      }
+
+      // Calculate line totals
+      const lineTotal = item.qty * item.sellPricePerUnit
+      const lineProfit = item.qty * (item.sellPricePerUnit - costPrice)
+
+      totalSum += lineTotal
+      totalProfit += lineProfit
+
+      saleItemsData.push({
+        productId: item.productId,
+        qty: item.qty,
+        sellPricePerUnit: item.sellPricePerUnit,
+        costPricePerUnitSnapshot: costPrice,
+        lineTotal,
+        lineProfit,
+      })
     }
-  );
-});
+
+    // Create sale with items
+    const sale = await prisma.sale.create({
+      data: {
+        sellerId: req.user.id,
+        soldAt: new Date(),
+        customerName: customerName || null,
+        paymentType: paymentType || null,
+        totalSum,
+        totalProfit,
+        saleItems: {
+          create: saleItemsData,
+        },
+      },
+      include: { saleItems: { include: { product: true } } },
+    })
+
+    // If seller, hide profit numbers
+    const hideProfit = req.user?.role !== 'manager'
+    const resp = {
+      id: sale.id,
+      totalSum: sale.totalSum,
+      customerName: sale.customerName,
+      paymentType: sale.paymentType,
+      soldAt: sale.soldAt,
+      items: sale.saleItems.map((si) => ({
+        productId: si.productId,
+        qty: si.qty,
+        sellPricePerUnit: si.sellPricePerUnit,
+        lineTotal: si.lineTotal,
+        ...(hideProfit ? {} : { costPricePerUnitSnapshot: si.costPricePerUnitSnapshot, lineProfit: si.lineProfit }),
+      })),
+    }
+
+    if (!hideProfit) {
+      resp.totalProfit = sale.totalProfit
+    }
+
+    res.json(resp)
+  } catch (error) {
+    console.error('Sale creation error:', error)
+    res.status(500).json({ error: 'Xato' })
+  }
+})
 
 // Get sales
-router.get('/', verifyToken, (req, res) => {
-  const { start_date, end_date, seller_id } = req.query;
+router.get('/', verifyToken, async (req, res) => {
+  try {
+    const { startDate, endDate, sellerId } = req.query
 
-  let query = `SELECT s.*, u.name as seller_name FROM sales s
-               JOIN users u ON s.seller_id = u.id WHERE 1=1`;
-  const params = [];
-
-  if (start_date) {
-    query += ` AND DATE(s.sold_at) >= DATE(?)`;
-    params.push(start_date);
-  }
-
-  if (end_date) {
-    query += ` AND DATE(s.sold_at) <= DATE(?)`;
-    params.push(end_date);
-  }
-
-  if (seller_id) {
-    query += ` AND s.seller_id = ?`;
-    params.push(seller_id);
-  }
-
-  query += ` ORDER BY s.sold_at DESC`;
-
-    db.all(query, params, (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: 'Server xatosi' });
+    const where = {}
+    if (startDate) {
+      where.soldAt = { gte: new Date(startDate) }
     }
-    // hide total_profit for sellers
-    const hideProfit = req.user?.role !== 'manager';
+    if (endDate) {
+      const end = new Date(endDate)
+      end.setHours(23, 59, 59, 999)
+      if (where.soldAt) {
+        where.soldAt.lte = end
+      } else {
+        where.soldAt = { lte: end }
+      }
+    }
+    if (sellerId) {
+      where.sellerId = parseInt(sellerId)
+    }
+
+    const sales = await prisma.sale.findMany({
+      where,
+      include: { seller: true },
+      orderBy: { soldAt: 'desc' },
+    })
+
+    // Hide profit for sellers
+    const hideProfit = req.user?.role !== 'manager'
     if (hideProfit) {
-      const filtered = (rows || []).map((r) => {
-        const copy = { ...r };
-        delete copy.total_profit;
-        return copy;
-      });
-      return res.json(filtered);
+      const filtered = sales.map((s) => {
+        const { totalProfit, ...rest } = s
+        return rest
+      })
+      return res.json(filtered)
     }
-    res.json(rows || []);
-  });
-});
+
+    res.json(sales)
+  } catch (error) {
+    res.status(500).json({ error: 'Server xatosi' })
+  }
+})
 
 // Get sale details
-router.get('/:id', verifyToken, (req, res) => {
-  db.get('SELECT * FROM sales WHERE id = ?', [req.params.id], (err, sale) => {
-    if (err || !sale) {
-      return res.status(404).json({ error: 'Sotuvni topilmadi' });
+router.get('/:id', verifyToken, async (req, res) => {
+  try {
+    const sale = await prisma.sale.findUnique({
+      where: { id: parseInt(req.params.id) },
+      include: {
+        saleItems: { include: { product: true } },
+        seller: true,
+      },
+    })
+
+    if (!sale) {
+      return res.status(404).json({ error: 'Sotuvni topilmadi' })
     }
 
-    db.all(
-      `SELECT si.*, p.name, p.unit FROM sale_items si
-       JOIN products p ON si.product_id = p.id
-       WHERE si.sale_id = ?`,
-      [req.params.id],
-      (err, items) => {
-        if (err) {
-          return res.status(500).json({ error: 'Server xatosi' });
-        }
-        const hideProfit = req.user?.role !== 'manager';
-        const itemsFiltered = (items || []).map((it) => {
-          const copy = { ...it };
-          if (hideProfit) {
-            delete copy.line_profit;
-            delete copy.cost_price_per_unit_snapshot;
-          }
-          return copy;
-        });
-
-        const saleResp = { ...sale, items: itemsFiltered };
-        if (hideProfit) delete saleResp.total_profit;
-
-        res.json(saleResp);
+    const hideProfit = req.user?.role !== 'manager'
+    const itemsFiltered = sale.saleItems.map((item) => {
+      const { lineProfit, costPricePerUnitSnapshot, ...rest } = item
+      if (hideProfit) {
+        return rest
       }
-    );
-  });
-});
+      return item
+    })
 
-export default router;
+    const saleResp = { ...sale, saleItems: itemsFiltered }
+    if (hideProfit) {
+      delete saleResp.totalProfit
+    }
+
+    res.json(saleResp)
+  } catch (error) {
+    res.status(404).json({ error: 'Sotuvni topilmadi' })
+  }
+})
+
+export default router
+

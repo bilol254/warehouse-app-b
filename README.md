@@ -27,7 +27,7 @@ Ombor inventori va sotuvlarni boshqarish uchun web-asosida yaratilgan tizim. Rol
 
 ### Backend
 - Node.js + Express
-- SQLite3
+- PostgreSQL + Prisma ORM
 - JWT autentifikatsiya
 - bcryptjs parol tikilishi
 
@@ -41,13 +41,48 @@ Ombor inventori va sotuvlarni boshqarish uchun web-asosida yaratilgan tizim. Rol
 
 ## O'rnatish
 
+### Talab qilinadigan dasturlar
+- Node.js 22.14.0 yoki yuqori
+- PostgreSQL 12+ yoki Docker
+- npm
+
 ### Backend
 
 ```bash
 cd backend
 npm install
-npm run dev
+
+# PostgreSQL bilan ishlay boshlash (agar Docker ishlatilsa)
+cd ..
+docker-compose up -d
+cd backend
+
+# Migrations joylash
+npx prisma migrate deploy
+
+# Test ma'lumotlari qo'shish (ixtiyoriy)
+npm run seed
+
+# Serverini ishga tushirish
+npm start
 ```
+
+Backend `http://localhost:5000` da ishga tushadi.
+
+#### Database konfiguratsiyasi
+
+`.env` faylini yarating:
+
+```env
+DATABASE_URL="postgresql://warehouse_user:warehouse_pass@localhost:5432/warehouse_db?schema=public"
+JWT_SECRET="your-super-secret-key-change-in-production"
+PORT=5000
+NODE_ENV=development
+```
+
+### PostgreSQL migratsiyasi haqida batafsil
+
+Sinov ma'lumotlarini yuklash va deployment qo'llanmasi uchun [POSTGRESQL_MIGRATION.md](./POSTGRESQL_MIGRATION.md) faylini ko'ring.
 
 Server `http://localhost:5000` da ishga tushadi
 

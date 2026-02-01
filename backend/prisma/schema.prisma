@@ -1,0 +1,207 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int     @id @default(autoincrement())
+  name      String
+  username  String  @unique
+  passwordHash String
+  role      String  @default("seller") // "manager" or "seller"
+  createdAt DateTime @default(now())
+
+  sales     Sale[]
+  cashOuts  CashOut[]
+  debts     Debt[]
+  batches   IncomingBatch[]
+
+  @@index([username])
+  @@index([role])
+}
+
+model Product {
+  id        Int     @id @default(autoincrement())
+  sku       String?
+  name      String
+  category  String?
+  unit      String  @default("pcs") // "pcs", "m" (meter), etc
+  type      String  @default("product") // "product" or "armatura"
+  diameterMm Int?
+  brand     String?
+  isActive  Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  purchases      Purchase[]
+  batchProducts  BatchProduct[]
+  saleItems      SaleItem[]
+  pricingRules   PricingRule[]
+
+  @@index([name])
+  @@index([type])
+}
+
+model PricingRule {
+  id        Int     @id @default(autoincrement())
+  productId Int     @unique
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  minimalPricePerUnit      Float   @default(0)
+  recommendedPricePerUnit  Float?
+  promoType                String?
+  promoValue               Float?
+  promoStart               DateTime?
+  promoEnd                 DateTime?
+  createdAt                DateTime @default(now())
+
+  @@index([productId])
+}
+
+model Purchase {
+  id        Int     @id @default(autoincrement())
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  qtyIn                Int
+  buyPricePerUnit      Float
+  expenseTotal         Float    @default(0)
+  arrivedAt            DateTime
+  note                 String?
+  createdAt            DateTime @default(now())
+
+  @@index([productId])
+  @@index([arrivedAt])
+}
+
+model IncomingBatch {
+  id        Int     @id @default(autoincrement())
+  createdById Int
+  createdBy  User    @relation(fields: [createdById], references: [id])
+  
+  supplierName      String?
+  note              String?
+  totalTons         Float
+  pricePerTon       Float
+  baseTotalSum      Float
+  createdAt         DateTime @default(now())
+
+  batchProducts     BatchProduct[]
+  batchExpenses     BatchExpense[]
+
+  @@index([createdById])
+  @@index([createdAt])
+}
+
+model BatchProduct {
+  id        Int     @id @default(autoincrement())
+  batchId   Int
+  batch     IncomingBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  productId Int
+  product   Product @relation(fields: [productId], references: [id])
+  
+  qtyPcs                    Int
+  pieceLengthsJson          String? // JSON array of lengths
+  defaultPieceLengthM       Float?
+  totalMeters               Float
+  allocatedTons             Float?
+  allocatedBaseSum          Float?
+  allocatedExpensesSum      Float?
+  totalCostSum              Float?
+  costPerTon                Float?
+  costPerMeter              Float?
+  costPerPiece              Float?
+
+  @@index([batchId])
+  @@index([productId])
+}
+
+model BatchExpense {
+  id        Int     @id @default(autoincrement())
+  batchId   Int
+  batch     IncomingBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  
+  amount    Float
+  comment   String?
+  createdAt DateTime @default(now())
+
+  @@index([batchId])
+}
+
+model Sale {
+  id        Int     @id @default(autoincrement())
+  sellerId  Int
+  seller    User    @relation(fields: [sellerId], references: [id])
+  
+  soldAt        DateTime
+  customerName  String?
+  paymentType   String?
+  totalSum      Float
+  totalProfit   Float
+  createdAt     DateTime @default(now())
+
+  saleItems SaleItem[]
+
+  @@index([sellerId])
+  @@index([soldAt])
+}
+
+model SaleItem {
+  id        Int     @id @default(autoincrement())
+  saleId    Int
+  sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId Int
+  product   Product @relation(fields: [productId], references: [id])
+  
+  qty                         Int
+  sellPricePerUnit            Float
+  costPricePerUnitSnapshot    Float
+  lineTotal                   Float
+  lineProfit                  Float
+  createdAt                   DateTime @default(now())
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+model CashOut {
+  id        Int     @id @default(autoincrement())
+  createdById Int
+  createdBy  User    @relation(fields: [createdById], references: [id])
+  
+  receiverName String
+  amount       Float
+  takenAt      DateTime
+  note         String?
+  createdAt    DateTime @default(now())
+
+  @@index([createdById])
+  @@index([takenAt])
+}
+
+model Debt {
+  id        Int     @id @default(autoincrement())
+  createdById Int
+  createdBy  User    @relation(fields: [createdById], references: [id])
+  
+  customerName String
+  phone        String
+  givenAt      DateTime
+  dueDate      DateTime
+  amount       Float
+  note         String?
+  status       String  @default("open") // "open" or "paid"
+  paidAt       DateTime?
+  paidAmount   Float?
+  createdAt    DateTime @default(now())
+
+  @@index([createdById])
+  @@index([status])
+  @@index([dueDate])
+}

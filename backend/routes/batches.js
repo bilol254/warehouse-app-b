@@ -1,142 +1,164 @@
-import express from 'express';
-import { db } from '../server.js';
-import { verifyToken } from '../middleware/auth.js';
+import express from 'express'
+import { prisma } from '../server.js'
+import { verifyToken } from '../middleware/auth.js'
 
-const router = express.Router();
+const router = express.Router()
 
 // Create batch
-router.post('/', verifyToken, (req, res) => {
-  const userId = req.user?.id;
-  const { supplier_name, note, total_tons, price_per_ton, products, expenses } = req.body;
+router.post('/', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user?.id
+    const { supplierName, note, totalTons, pricePerTon, products, expenses } = req.body
 
-  if (!total_tons || !price_per_ton) return res.status(400).json({ error: 'total_tons va price_per_ton kerak' });
-  if (!Array.isArray(products) || products.length === 0) return res.status(400).json({ error: 'Kamida 1 mahsulot kerak' });
-
-  const base_total_sum = Number(total_tons) * Number(price_per_ton);
-
-  db.run(
-    'INSERT INTO incoming_batches (created_by_user_id, supplier_name, note, total_tons, price_per_ton, base_total_sum) VALUES (?, ?, ?, ?, ?, ?)',
-    [userId || null, supplier_name || null, note || null, total_tons, price_per_ton, base_total_sum],
-    function (err) {
-      if (err) return res.status(500).json({ error: 'Xato batch yaratishda' });
-
-      const batchId = this.lastID;
-
-      // insert expenses
-      const expensesTotal = Array.isArray(expenses)
-        ? expenses.reduce((s, e) => s + Number(e.amount || 0), 0)
-        : 0;
-
-      if (Array.isArray(expenses)) {
-        const stmtExp = db.prepare('INSERT INTO batch_expenses (batch_id, amount, comment) VALUES (?, ?, ?)');
-        expenses.forEach((ex) => {
-          stmtExp.run(batchId, ex.amount || 0, ex.comment || null);
-        });
-        stmtExp.finalize();
-      }
-
-      // compute total meters sum
-      let totalMetersAll = 0;
-      const computedProducts = products.map((p) => {
-        const qty = Number(p.qty_pcs || 0);
-        const defaultLen = Number(p.default_piece_length_m || 0);
-        const extra = Array.isArray(p.piece_lengths_list) ? p.piece_lengths_list.map(Number) : [];
-        const extraSum = extra.reduce((s, v) => s + (v || 0), 0);
-        const total_meters = qty * defaultLen + extraSum;
-        totalMetersAll += total_meters;
-        return { ...p, qty, defaultLen, extra, total_meters };
-      });
-
-      // allocate costs
-      const stmtProd = db.prepare(
-        `INSERT INTO batch_products (batch_id, product_id, qty_pcs, piece_lengths_json, default_piece_length_m, total_meters, allocated_tons, allocated_base_sum, allocated_expenses_sum, total_cost_sum, cost_per_ton, cost_per_meter, cost_per_piece)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      );
-
-      computedProducts.forEach((cp) => {
-        const share = totalMetersAll > 0 ? cp.total_meters / totalMetersAll : 0;
-        const allocated_base_sum = share * base_total_sum;
-        const allocated_expenses_sum = share * expensesTotal;
-        const total_cost_sum = allocated_base_sum + allocated_expenses_sum;
-        const allocated_tons = share * Number(total_tons);
-        const cost_per_ton = allocated_tons > 0 ? total_cost_sum / allocated_tons : 0;
-        const cost_per_meter = cp.total_meters > 0 ? total_cost_sum / cp.total_meters : 0;
-        const cost_per_piece = cp.qty > 0 ? total_cost_sum / cp.qty : 0;
-
-        stmtProd.run(
-          batchId,
-          cp.product_id,
-          cp.qty,
-          JSON.stringify(cp.extra || []),
-          cp.defaultLen,
-          cp.total_meters,
-          allocated_tons,
-          allocated_base_sum,
-          allocated_expenses_sum,
-          total_cost_sum,
-          cost_per_ton,
-          cost_per_meter,
-          cost_per_piece
-        );
-      });
-
-      stmtProd.finalize((e) => {
-        if (e) return res.status(500).json({ error: 'Xato batch_products yozishda' });
-
-        // Update stock: create a purchase-like record to increase qty (simple approach)
-        const stmtPur = db.prepare('INSERT INTO purchases (product_id, qty_in, buy_price_per_unit, expense_total, arrived_at, note) VALUES (?, ?, ?, ?, ?, ?)');
-        computedProducts.forEach((cp) => {
-          // buy_price_per_unit: use cost_per_piece if unit is pcs, else cost_per_meter
-          const unitPrice = cp.qty > 0 ? (cp.cost_per_piece || 0) : 0;
-          stmtPur.run(cp.product_id, cp.qty, unitPrice, 0, new Date().toISOString(), `Batch ${batchId}`);
-        });
-        stmtPur.finalize();
-
-        res.json({ id: batchId });
-      });
+    if (!totalTons || !pricePerTon) {
+      return res.status(400).json({ error: 'totalTons va pricePerTon kerak' })
     }
-  );
-});
+    if (!Array.isArray(products) || products.length === 0) {
+      return res.status(400).json({ error: 'Kamida 1 mahsulot kerak' })
+    }
+
+    const baseTotalSum = Number(totalTons) * Number(pricePerTon)
+
+    // Create batch with products and expenses
+    const batch = await prisma.incomingBatch.create({
+      data: {
+        createdById: userId || null,
+        supplierName: supplierName || null,
+        note: note || null,
+        totalTons,
+        pricePerTon,
+        baseTotalSum,
+        batchExpenses: {
+          create: Array.isArray(expenses)
+            ? expenses.map((e) => ({
+                amount: e.amount || 0,
+                comment: e.comment || null,
+              }))
+            : [],
+        },
+      },
+      include: { batchExpenses: true },
+    })
+
+    const batchId = batch.id
+    const expensesTotal = (batch.batchExpenses || []).reduce((s, e) => s + (e.amount || 0), 0)
+
+    // Compute total meters
+    let totalMetersAll = 0
+    const computedProducts = products.map((p) => {
+      const qty = Number(p.qtyPcs || 0)
+      const defaultLen = Number(p.defaultPieceLengthM || 0)
+      const extra = Array.isArray(p.pieceLengthsList) ? p.pieceLengthsList.map(Number) : []
+      const extraSum = extra.reduce((s, v) => s + (v || 0), 0)
+      const totalMeters = qty * defaultLen + extraSum
+      totalMetersAll += totalMeters
+      return { ...p, qty, defaultLen, extra, totalMeters }
+    })
+
+    // Create batch products with cost allocation
+    const batchProductsData = computedProducts.map((cp) => {
+      const share = totalMetersAll > 0 ? cp.totalMeters / totalMetersAll : 0
+      const allocatedBaseSum = share * baseTotalSum
+      const allocatedExpensesSum = share * expensesTotal
+      const totalCostSum = allocatedBaseSum + allocatedExpensesSum
+      const allocatedTons = share * Number(totalTons)
+      const costPerTon = allocatedTons > 0 ? totalCostSum / allocatedTons : 0
+      const costPerMeter = cp.totalMeters > 0 ? totalCostSum / cp.totalMeters : 0
+      const costPerPiece = cp.qty > 0 ? totalCostSum / cp.qty : 0
+
+      return {
+        productId: cp.productId,
+        qtyPcs: cp.qty,
+        pieceLengthsJson: cp.extra || [],
+        defaultPieceLengthM: cp.defaultLen,
+        totalMeters: cp.totalMeters,
+        allocatedTons,
+        allocatedBaseSum,
+        allocatedExpensesSum,
+        totalCostSum,
+        costPerTon,
+        costPerMeter,
+        costPerPiece,
+      }
+    })
+
+    const batchProductsCreated = await prisma.batchProduct.createMany({
+      data: batchProductsData.map((bp) => ({ batchId, ...bp })),
+    })
+
+    // Create purchases to update stock
+    const purchasesData = computedProducts.map((cp) => ({
+      productId: cp.productId,
+      qtyIn: cp.qty,
+      buyPricePerUnit: cp.qty > 0 ? (cp.costPerPiece || 0) : 0,
+      expenseTotal: 0,
+      arrivedAt: new Date(),
+      note: `Batch ${batchId}`,
+    }))
+
+    await prisma.purchase.createMany({
+      data: purchasesData,
+    })
+
+    res.json({ id: batchId })
+  } catch (error) {
+    console.error('Batch creation error:', error)
+    res.status(500).json({ error: 'Xato batch yaratishda' })
+  }
+})
 
 // List batches
-router.get('/', verifyToken, (req, res) => {
-  db.all('SELECT * FROM incoming_batches ORDER BY created_at DESC', [], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Server xatosi' });
-    res.json(rows || []);
-  });
-});
+router.get('/', verifyToken, async (req, res) => {
+  try {
+    const batches = await prisma.incomingBatch.findMany({
+      include: { batchExpenses: true, creator: true },
+      orderBy: { createdAt: 'desc' },
+    })
+    res.json(batches)
+  } catch (error) {
+    res.status(500).json({ error: 'Server xatosi' })
+  }
+})
 
 // Get batch details
-router.get('/:id', verifyToken, (req, res) => {
-  const id = req.params.id;
-  db.get('SELECT * FROM incoming_batches WHERE id = ?', [id], (err, batch) => {
-    if (err || !batch) return res.status(404).json({ error: 'Batch topilmadi' });
+router.get('/:id', verifyToken, async (req, res) => {
+  try {
+    const batchId = parseInt(req.params.id)
 
-    db.all('SELECT * FROM batch_expenses WHERE batch_id = ?', [id], (err2, expenses) => {
-      if (err2) expenses = [];
-      db.all('SELECT bp.*, p.name as product_name FROM batch_products bp LEFT JOIN products p ON p.id = bp.product_id WHERE bp.batch_id = ?', [id], (err3, products) => {
-        if (err3) products = [];
+    const batch = await prisma.incomingBatch.findUnique({
+      where: { id: batchId },
+      include: {
+        batchExpenses: true,
+        batchProducts: { include: { product: true } },
+        creator: true,
+      },
+    })
 
-        // If requester is seller, remove profit-related fields
-        const hideProfit = req.user?.role !== 'manager';
+    if (!batch) {
+      return res.status(404).json({ error: 'Batch topilmadi' })
+    }
 
-        const productsFiltered = products.map((pr) => {
-          if (hideProfit) {
-            delete pr.allocated_base_sum;
-            delete pr.allocated_expenses_sum;
-            delete pr.total_cost_sum;
-            delete pr.cost_per_ton;
-            delete pr.cost_per_meter;
-            delete pr.cost_per_piece;
-          }
-          return pr;
-        });
+    const hideProfit = req.user?.role !== 'manager'
 
-        const response = { batch, expenses: expenses || [], products: productsFiltered };
-        res.json(response);
-      });
-    });
-  });
-});
+    const productsFiltered = batch.batchProducts.map((p) => {
+      if (hideProfit) {
+        const { allocatedBaseSum, allocatedExpensesSum, totalCostSum, costPerTon, costPerMeter, costPerPiece, ...rest } = p
+        return rest
+      }
+      return p
+    })
 
-export default router;
+    const response = {
+      batch,
+      expenses: batch.batchExpenses,
+      products: productsFiltered,
+    }
+
+    res.json(response)
+  } catch (error) {
+    res.status(404).json({ error: 'Batch topilmadi' })
+  }
+})
+
+export default router
+

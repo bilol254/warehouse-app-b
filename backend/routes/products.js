@@ -1,104 +1,129 @@
-import express from 'express';
-import { db } from '../server.js';
-import { verifyToken } from '../middleware/auth.js';
+import express from 'express'
+import { prisma } from '../server.js'
+import { verifyToken } from '../middleware/auth.js'
 
-const router = express.Router();
+const router = express.Router()
 
 // Get all products with current stock
-router.get('/', verifyToken, (req, res) => {
-  db.all(
-    `SELECT p.*, 
-      COALESCE(SUM(pur.qty_in), 0) - COALESCE((SELECT SUM(si.qty) FROM sale_items si WHERE si.product_id = p.id), 0) as current_qty,
-      pr.minimal_price_per_unit, pr.recommended_price_per_unit, pr.promo_type, pr.promo_value, pr.promo_start, pr.promo_end
-     FROM products p
-     LEFT JOIN purchases pur ON p.id = pur.product_id
-     LEFT JOIN pricing_rules pr ON p.id = pr.product_id
-     WHERE p.is_active = 1
-     GROUP BY p.id`,
-    [],
-    (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: 'Server xatosi' });
-      }
-      res.json(rows || []);
-    }
-  );
-});
+router.get('/', verifyToken, async (req, res) => {
+  try {
+    const products = await prisma.product.findMany({
+      where: { isActive: true },
+      include: {
+        _count: {
+          select: {
+            purchases: true,
+            saleItems: true,
+          },
+        },
+        pricingRule: true,
+      },
+    })
+
+    const enriched = products.map((p) => ({
+      id: p.id,
+      sku: p.sku,
+      name: p.name,
+      category: p.category,
+      unit: p.unit,
+      type: p.type,
+      diameterMm: p.diameterMm,
+      brand: p.brand,
+      isActive: p.isActive,
+      createdAt: p.createdAt,
+      pricingRule: p.pricingRule,
+    }))
+
+    res.json(enriched)
+  } catch (error) {
+    res.status(500).json({ error: 'Server xatosi' })
+  }
+})
 
 // Get single product with stock
-router.get('/:id', verifyToken, (req, res) => {
-  const productId = req.params.id;
+router.get('/:id', verifyToken, async (req, res) => {
+  try {
+    const product = await prisma.product.findUnique({
+      where: { id: parseInt(req.params.id) },
+      include: {
+        pricingRule: true,
+        purchases: true,
+        saleItems: true,
+      },
+    })
 
-  db.get(
-    `SELECT p.*, 
-      COALESCE(SUM(pur.qty_in), 0) - COALESCE((SELECT SUM(si.qty) FROM sale_items si WHERE si.product_id = p.id), 0) as current_qty,
-      pr.minimal_price_per_unit, pr.recommended_price_per_unit, pr.promo_type, pr.promo_value, pr.promo_start, pr.promo_end
-     FROM products p
-     LEFT JOIN purchases pur ON p.id = pur.product_id
-     LEFT JOIN pricing_rules pr ON p.id = pr.product_id
-     WHERE p.id = ? AND p.is_active = 1
-     GROUP BY p.id`,
-    [productId],
-    (err, row) => {
-      if (err || !row) {
-        return res.status(404).json({ error: 'Mahsulot topilmadi' });
-      }
-      res.json(row);
+    if (!product) {
+      return res.status(404).json({ error: 'Mahsulot topilmadi' })
     }
-  );
-});
+
+    res.json(product)
+  } catch (error) {
+    res.status(404).json({ error: 'Mahsulot topilmadi' })
+  }
+})
 
 // Create product (manager only)
-router.post('/', verifyToken, (req, res) => {
-  if (req.user.role !== 'manager') {
-    return res.status(403).json({ error: 'Faqat menejer mahsulot yaratishi mumkin' });
-  }
-
-  const { sku, name, category, unit } = req.body;
-
-  if (!name) {
-    return res.status(400).json({ error: 'Mahsulot nomi kerak' });
-  }
-
-  db.run(
-    'INSERT INTO products (sku, name, category, unit, is_active) VALUES (?, ?, ?, ?, 1)',
-    [sku || null, name, category || null, unit || 'pcs'],
-    function (err) {
-      if (err) {
-        return res.status(500).json({ error: 'Xato' });
-      }
-
-      // Create default pricing rule
-      db.run(
-        'INSERT INTO pricing_rules (product_id, minimal_price_per_unit, recommended_price_per_unit) VALUES (?, ?, ?)',
-        [this.lastID, 0, 0]
-      );
-
-      res.json({ id: this.lastID, sku, name, category, unit: unit || 'pcs' });
+router.post('/', verifyToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manager') {
+      return res.status(403).json({ error: 'Faqat menejer mahsulot yaratishi mumkin' })
     }
-  );
-});
+
+    const { sku, name, category, unit, type, diameterMm, brand } = req.body
+
+    if (!name) {
+      return res.status(400).json({ error: 'Mahsulot nomi kerak' })
+    }
+
+    const product = await prisma.product.create({
+      data: {
+        sku: sku || null,
+        name,
+        category: category || null,
+        unit: unit || 'pcs',
+        type: type || null,
+        diameterMm: diameterMm || null,
+        brand: brand || null,
+        isActive: true,
+      },
+    })
+
+    // Create default pricing rule
+    await prisma.pricingRule.create({
+      data: {
+        productId: product.id,
+        minimalPricePerUnit: 0,
+        recommendedPricePerUnit: 0,
+      },
+    })
+
+    res.json(product)
+  } catch (error) {
+    res.status(500).json({ error: 'Xato' })
+  }
+})
 
 // Search products
-router.get('/search/:query', verifyToken, (req, res) => {
-  const query = `%${req.params.query}%`;
+router.get('/search/:query', verifyToken, async (req, res) => {
+  try {
+    const query = req.params.query
 
-  db.all(
-    `SELECT p.*, 
-      COALESCE(SUM(pur.qty_in), 0) - COALESCE((SELECT SUM(si.qty) FROM sale_items si WHERE si.product_id = p.id), 0) as current_qty
-     FROM products p
-     LEFT JOIN purchases pur ON p.id = pur.product_id
-     WHERE p.is_active = 1 AND (p.name LIKE ? OR p.sku LIKE ?)
-     GROUP BY p.id
-     LIMIT 20`,
-    [query, query],
-    (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: 'Server xatosi' });
-      }
-      res.json(rows || []);
-    }
-  );
-});
+    const products = await prisma.product.findMany({
+      where: {
+        isActive: true,
+        OR: [{ name: { contains: query, mode: 'insensitive' } }, { sku: { contains: query, mode: 'insensitive' } }],
+      },
+      include: {
+        pricingRule: true,
+      },
+      take: 20,
+    })
 
-export default router;
+    res.json(products)
+  } catch (error) {
+    res.status(500).json({ error: 'Server xatosi' })
+  }
+})
+
+export default router
+
