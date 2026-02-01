@@ -17,51 +17,57 @@ body {
 .container {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 12px;
+}
+
+@media (min-width: 640px) {
+  .container {
+    padding: 20px;
+  }
 }
 
 .btn {
-  @apply px-4 py-2 rounded font-medium transition-colors;
+  @apply px-3 py-2 sm:px-4 sm:py-2 rounded font-medium transition-colors text-sm sm:text-base;
 }
 
 .btn-primary {
-  @apply bg-blue-600 text-white hover:bg-blue-700;
+  @apply bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800;
 }
 
 .btn-secondary {
-  @apply bg-gray-300 text-gray-800 hover:bg-gray-400;
+  @apply bg-gray-300 text-gray-800 hover:bg-gray-400 active:bg-gray-500;
 }
 
 .btn-danger {
-  @apply bg-red-600 text-white hover:bg-red-700;
+  @apply bg-red-600 text-white hover:bg-red-700 active:bg-red-800;
 }
 
 .btn-sm {
-  @apply px-2 py-1 text-sm;
+  @apply px-2 py-1 text-xs sm:text-sm;
 }
 
 .input-field {
-  @apply w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500;
+  @apply w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-base sm:text-sm;
 }
 
 .card {
-  @apply bg-white rounded-lg shadow-md p-6 mb-4;
+  @apply bg-white rounded-lg shadow-md p-4 sm:p-6 mb-4;
 }
 
 .table {
-  @apply w-full border-collapse;
+  @apply w-full border-collapse text-sm sm:text-base;
 }
 
 .table th {
-  @apply bg-gray-100 px-4 py-2 text-left font-semibold border-b;
+  @apply bg-gray-100 px-2 sm:px-4 py-2 text-left font-semibold border-b text-xs sm:text-sm;
 }
 
 .table td {
-  @apply px-4 py-2 border-b;
+  @apply px-2 sm:px-4 py-2 border-b;
 }
 
 .toast {
-  @apply fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg text-white z-50;
+  @apply fixed bottom-4 right-4 left-4 sm:left-auto px-4 py-3 rounded-lg shadow-lg text-white z-50 text-sm sm:text-base max-w-sm;
 }
 
 .toast-success {

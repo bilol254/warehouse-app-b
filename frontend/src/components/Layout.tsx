@@ -13,16 +13,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-gray-100">
-      <nav className="bg-white shadow-md">
-        <div className="container flex justify-between items-center py-4">
-          <h1 className="text-2xl font-bold text-blue-600">Ombor</h1>
-          <div className="flex items-center gap-4">
+      <nav className="bg-white shadow-md sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row justify-between items-center py-3 sm:py-4 gap-3 sm:gap-0">
+          <h1 className="text-xl sm:text-2xl font-bold text-blue-600">Ombor</h1>
+          <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-4 w-full sm:w-auto">
             {user && (
               <>
-                <span className="text-gray-700">
-                  {user.name} ({user.role === 'manager' ? 'Menejer' : 'Sotuvchi'})
+                <span className="text-xs sm:text-sm text-gray-700 text-center sm:text-left">
+                  {user.name} <br className="sm:hidden" />({user.role === 'manager' ? 'Menejer' : 'Sotuvchi'})
                 </span>
-                <button onClick={handleLogout} className="btn btn-secondary btn-sm">
+                <button onClick={handleLogout} className="btn btn-secondary btn-sm w-full sm:w-auto">
                   Chiqish
                 </button>
               </>
@@ -31,7 +31,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </nav>
 
-      <div className="container py-8">{children}</div>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">{children}</div>
     </div>
   );
 }

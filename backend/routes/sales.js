@@ -102,7 +102,22 @@ router.post('/', verifyToken, async (req, res) => {
         );
       });
 
-      res.json({ id: saleId, total_sum: totalSum, total_profit: totalProfit, items: saleItems });
+      // If seller, do not return profit numbers
+      const hideProfit = req.user?.role !== 'manager';
+      const resp = { id: saleId, total_sum: totalSum, items: saleItems };
+      if (!hideProfit) {
+        resp.total_profit = totalProfit;
+      } else {
+        // remove profit fields from items
+        resp.items = saleItems.map((it) => {
+          const copy = { ...it };
+          delete copy.line_profit;
+          delete copy.cost_price_per_unit_snapshot; // hide cost snapshot from sellers
+          return copy;
+        });
+      }
+
+      res.json(resp);
     }
   );
 });
@@ -132,9 +147,19 @@ router.get('/', verifyToken, (req, res) => {
 
   query += ` ORDER BY s.sold_at DESC`;
 
-  db.all(query, params, (err, rows) => {
+    db.all(query, params, (err, rows) => {
     if (err) {
       return res.status(500).json({ error: 'Server xatosi' });
+    }
+    // hide total_profit for sellers
+    const hideProfit = req.user?.role !== 'manager';
+    if (hideProfit) {
+      const filtered = (rows || []).map((r) => {
+        const copy = { ...r };
+        delete copy.total_profit;
+        return copy;
+      });
+      return res.json(filtered);
     }
     res.json(rows || []);
   });
@@ -156,7 +181,20 @@ router.get('/:id', verifyToken, (req, res) => {
         if (err) {
           return res.status(500).json({ error: 'Server xatosi' });
         }
-        res.json({ ...sale, items: items || [] });
+        const hideProfit = req.user?.role !== 'manager';
+        const itemsFiltered = (items || []).map((it) => {
+          const copy = { ...it };
+          if (hideProfit) {
+            delete copy.line_profit;
+            delete copy.cost_price_per_unit_snapshot;
+          }
+          return copy;
+        });
+
+        const saleResp = { ...sale, items: itemsFiltered };
+        if (hideProfit) delete saleResp.total_profit;
+
+        res.json(saleResp);
       }
     );
   });

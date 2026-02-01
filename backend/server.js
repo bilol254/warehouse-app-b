@@ -12,6 +12,9 @@ import saleRoutes from './routes/sales.js';
 import reportRoutes from './routes/reports.js';
 import userRoutes from './routes/users.js';
 import pricingRoutes from './routes/pricing.js';
+import batchRoutes from './routes/batches.js';
+import cashoutRoutes from './routes/cashout.js';
+import debtsRoutes from './routes/debts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,6 +49,9 @@ app.use('/api/sales', saleRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/pricing', pricingRoutes);
+app.use('/api/batches', batchRoutes);
+app.use('/api/cashout', cashoutRoutes);
+app.use('/api/debts', debtsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

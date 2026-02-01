@@ -37,10 +37,18 @@ router.get('/dashboard', verifyToken, (req, res) => {
             return res.status(500).json({ error: 'Server xatosi' });
           }
 
-          res.json({
-            today_stats: todayStats || { sales_count: 0, total_revenue: 0, total_profit: 0 },
-            top_products: topProducts || []
+          const hideProfit = req.user?.role !== 'manager';
+          const statsResp = todayStats || { sales_count: 0, total_revenue: 0, total_profit: 0 };
+          if (hideProfit) {
+            delete statsResp.total_profit;
+          }
+          const topProductsResp = (topProducts || []).map((p) => {
+            const copy = { ...p };
+            if (hideProfit) delete copy.revenue; // keep revenue but remove profit-sensitive fields if any
+            return copy;
           });
+
+          res.json({ today_stats: statsResp, top_products: topProductsResp });
         }
       );
     }
@@ -106,10 +114,15 @@ router.get('/period', verifyToken, (req, res) => {
             return res.status(500).json({ error: 'Server xatosi' });
           }
 
-          res.json({
-            stats: stats || { sales_count: 0, total_revenue: 0, total_profit: 0, total_qty_sold: 0 },
-            products: products || []
+          const hideProfit = req.user?.role !== 'manager';
+          const statsResp = stats || { sales_count: 0, total_revenue: 0, total_profit: 0, total_qty_sold: 0 };
+          if (hideProfit) delete statsResp.total_profit;
+          const productsResp = (products || []).map((p) => {
+            const copy = { ...p };
+            if (hideProfit) delete copy.profit;
+            return copy;
           });
+          res.json({ stats: statsResp, products: productsResp });
         }
       );
     }

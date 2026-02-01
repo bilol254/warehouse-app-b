@@ -27,9 +27,9 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-blue-600">
-      <div className="bg-white rounded-lg shadow-xl p-8 w-96">
-        <h1 className="text-3xl font-bold text-center mb-8 text-blue-600">Ombor</h1>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-blue-600 px-4 py-8">
+      <div className="bg-white rounded-lg shadow-xl p-6 sm:p-8 w-full sm:w-96">
+        <h1 className="text-2xl sm:text-3xl font-bold text-center mb-6 sm:mb-8 text-blue-600">Ombor</h1>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -59,10 +59,10 @@ export function LoginPage() {
           </button>
         </form>
 
-        <div className="mt-6 p-4 bg-blue-50 rounded text-sm text-gray-700">
+        <div className="mt-6 p-4 bg-blue-50 rounded text-xs sm:text-sm text-gray-700">
           <p className="font-semibold mb-2">Test hisoblar:</p>
-          <p>Manager: admin / admin123</p>
-          <p>Seller: ali / seller123</p>
+          <p className="break-words">Manager: admin / admin123</p>
+          <p className="break-words">Seller: ali / seller123</p>
         </div>
       </div>
     </div>
