@@ -25,17 +25,6 @@ export function initializeDatabase(db) {
     )
   `);
 
-  // Add new columns to existing products table if they do not exist (safe to run)
-  try {
-    db.run(`ALTER TABLE products ADD COLUMN type TEXT DEFAULT 'product'`);
-  } catch (e) {}
-  try {
-    db.run(`ALTER TABLE products ADD COLUMN diameter_mm INTEGER`);
-  } catch (e) {}
-  try {
-    db.run(`ALTER TABLE products ADD COLUMN brand TEXT`);
-  } catch (e) {}
-
   db.run(`
     CREATE TABLE IF NOT EXISTS purchases (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
