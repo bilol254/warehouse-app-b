@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { User, Product, Purchase, Sale, PricingRule, DashboardStats } from '../types';
 
-const API_URL = '/api';
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 const api: AxiosInstance = axios.create({
   baseURL: API_URL

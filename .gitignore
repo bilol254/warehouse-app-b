@@ -5,3 +5,6 @@ dist/
 .DS_Store
 *.db
 .git
+
+# Local Netlify folder
+.netlify
