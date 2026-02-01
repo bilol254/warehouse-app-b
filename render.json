@@ -1,0 +1,20 @@
+{
+  "name": "warehouse-app",
+  "description": "Ombor - Warehouse Inventory & Sales Management System",
+  "buildCommand": "cd backend && npm install",
+  "startCommand": "cd backend && npm start",
+  "env": {
+    "PORT": {
+      "description": "Server port",
+      "value": "5000"
+    },
+    "NODE_ENV": {
+      "description": "Node environment",
+      "value": "production"
+    },
+    "SECRET_KEY": {
+      "description": "JWT secret key",
+      "value": "your-secret-key-change-in-production"
+    }
+  }
+}
