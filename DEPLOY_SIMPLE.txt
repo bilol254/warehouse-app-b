@@ -1,0 +1,81 @@
+DEPLOY STEPS (Copy-Paste Ready)
+
+=====================================================
+STEP 1: GitHub'da Repo Yarating
+=====================================================
+
+1. https://github.com/new'ga boring
+2. Name: warehouse-app
+3. Public tanlang
+4. Create repository
+
+=====================================================
+STEP 2: GitHub'ga Push Qiling
+=====================================================
+
+Terminal'da ishlating:
+
+cd c:\Users\user\Desktop\nothing\warehouse-app
+
+git config --global user.name "Your Name"
+git config --global user.email "your@email.com"
+
+git remote add origin https://github.com/YOUR_USERNAME/warehouse-app.git
+git branch -M main
+git push -u origin main
+
+=====================================================
+STEP 3: Render Backend Deploy
+=====================================================
+
+1. https://render.com'ga boring
+2. Dashboard -> New -> Web Service
+3. GitHub repo tanlang
+4. Sozlamalar:
+
+   Name: warehouse-backend
+   Runtime: Node
+   Root Directory: backend
+   Build Command: npm install
+   Start Command: npm start
+   
+   Environment Variables:
+   PORT=5000
+   NODE_ENV=production
+   SECRET_KEY=your-secret-2026
+
+5. Create Web Service
+6. 3-5 minut kutish
+7. Deploy tugangandan keyin, URL ko'chirib oling
+   (Misol: https://warehouse-backend-xxx.onrender.com)
+
+=====================================================
+STEP 4: Frontend Update va Deploy
+=====================================================
+
+Terminal'da:
+
+cd c:\Users\user\Desktop\nothing\warehouse-app\frontend
+
+echo "VITE_API_URL=https://warehouse-backend-xxx.onrender.com" > .env.production
+
+npm run build
+
+cd ..
+
+netlify deploy --prod --dir=frontend/dist
+
+=====================================================
+TAYYORLANDI!
+=====================================================
+
+Frontend: https://moshna.netlify.app
+Backend: https://warehouse-backend-xxx.onrender.com
+GitHub: https://github.com/YOUR_USERNAME/warehouse-app
+
+TEST:
+- Login: admin / admin123 (yoki ali / seller123)
+- Dashboard ko'rish
+- Sotuv qilish test qilish
+
+=====================================================
